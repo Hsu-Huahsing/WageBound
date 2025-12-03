@@ -1,251 +1,178 @@
-# 0 ±Æ°£¤ñ¹ï®×¥óªº³W«h
-def case_ingore(self, CollateralInfo, NearCase):
-    if NearCase['HouseTypeCode'] != CollateralInfo['HouseType_decode']:  # ±Æ°£¤£¦P«Øª«Ãş«¬
-        return 'Y'
-    elif NearCase['OutlierTxn'] == 'Y':  # ±Æ°£²§±`¥æ©ö
-        return 'Y'
-    elif 'B' in str(NearCase['FloorCode']):  # ±Æ°£¦a¤U
-        return 'Y'
-    elif int(NearCase['FloorCode']) < 1:  # ±Æ°£¦a¤U
-        return 'Y'
-    elif int(CollateralInfo['FloorCode']) != 1 and int(NearCase['FloorCode']) == 1:  # ¾á«O«~¦b1¼Ó¡A¤£¿ï1¼Ó®×¥ó
-        return 'Y'
+# similarity/engine.py
+
+from __future__ import annotations
+
+from typing import List, Dict, Any, Optional
+
+import numpy as np
+import pandas as pd
+
+from .metrics import (
+    calc_psi,
+    calc_ks,
+    calc_numeric_stats,
+    calc_categorical_distance,
+)
+
+
+def _is_numeric(series: pd.Series) -> bool:
+    """
+    åˆ¤æ–·æ¬„ä½æ˜¯å¦è¦–ç‚ºã€Œé€£çºŒæ•¸å€¼ã€ï¼š
+        - dtype ç‚º number
+        - æˆ–æ˜¯æ··é›œä½†ç¶“é to_numeric æœ‰å¤§éƒ¨åˆ†èƒ½è½‰æˆåŠŸ
+    """
+    if pd.api.types.is_numeric_dtype(series):
+        return True
+
+    # å˜—è©¦å¼·åˆ¶è½‰ numeric çœ‹æˆåŠŸæ¯”ä¾‹
+    converted = pd.to_numeric(series, errors="coerce")
+    ratio = converted.notna().mean()
+    return ratio >= 0.7
+
+
+def _prepare_feature_list(
+    df_ref: pd.DataFrame,
+    df_new: pd.DataFrame,
+    feature_cols: Optional[List[str]],
+) -> List[str]:
+    """
+    æ±ºå®šè¦åˆ†æçš„æ¬„ä½ï¼š
+        - è‹¥æœ‰æŒ‡å®š feature_colsï¼šå–å…©é‚Šéƒ½æœ‰çš„äº¤é›†
+        - å¦å‰‡ï¼šè‡ªå‹•æŠ“å…©é‚Šå…±åŒçš„æ¬„ä½ï¼ˆæ’é™¤æ˜é¡¯ id æ¬„ï¼‰
+    """
+    common = sorted(set(df_ref.columns).intersection(set(df_new.columns)))
+
+    if feature_cols:
+        cols = [c for c in feature_cols if c in common]
     else:
-        return 'N'  # ½T»{­n¤ñ¹ïªº®×¥ó
+        # è‡ªå‹•æ¨¡å¼ï¼šå…ˆæ‹¿å…±åŒæ¬„ä½ï¼Œå†æ’é™¤äº›å¸¸è¦‹ ID æ¬„
+        blacklist = {"id", "ID", "cust_id", "CUST_ID", "customer_id"}
+        cols = [c for c in common if c not in blacklist]
+
+    return cols
 
 
-# ³W«h1 ¤ñ¹ï¥æ©ö´Á¶¡
-def score1_transaction_datediff(self, CollateralInfo, NearCase, similarityDict):
+def run_similarity(
+    df_ref: pd.DataFrame,
+    df_new: pd.DataFrame,
+    *,
+    feature_cols: Optional[List[str]] = None,
+    max_top_diff: int = 5,
+    psi_bins: int = 10,
+) -> pd.DataFrame:
+    """
+    é«˜éšå°è£ï¼šæ¯”è¼ƒå…©å€‹ DataFrame åœ¨å„æ¬„ä½ä¸Šçš„åˆ†ä½ˆç›¸ä¼¼åº¦ã€‚
 
-    TimeDiffOfMonth = NearCase['TimeDiffOfMonth']
-    
-    if TimeDiffOfMonth <= similarityDict['DealMonthDiff'][0][0]:  # ªñ¥b¦~
-        return similarityDict['DealMonthDiff'][0][1]
-    elif TimeDiffOfMonth <= similarityDict['DealMonthDiff'][1][0]:  # ªñ¤@¦~
-        return similarityDict['DealMonthDiff'][1][1]
-    elif TimeDiffOfMonth <= similarityDict['DealMonthDiff'][2][0]:  # ªñ¨â¦~
-        return similarityDict['DealMonthDiff'][2][1]
-    elif TimeDiffOfMonth <= similarityDict['DealMonthDiff'][3][0]:  # ªñ¨â¦~
-        return similarityDict['DealMonthDiff'][3][1]
-    else:  # ¨â¦~¥H¤W
-        return 0
+    å…¸å‹ç”¨æ³•ï¼š
+        result = run_similarity(
+            df_ref=dev_df,         # ä¾‹å¦‚ï¼šæ­·å²æ¯é«”
+            df_new=oos_df,         # ä¾‹å¦‚ï¼šæ–°ç”³è«‹æˆ–æ–°åˆ¶
+            feature_cols=["age", "income", "ltv"],  # å¯é¸ï¼Œä¸çµ¦å°±è‡ªå‹•æŠ“å…±åŒæ¬„ä½
+        )
 
+    å›å‚³æ¬„ä½ï¼ˆæ•¸å€¼å‹ï¼‰ï¼š
+        - feature        : æ¬„ä½åç¨±
+        - type           : "numeric"
+        - psi            : PSI
+        - ks             : KS
+        - mean_ref       : åƒè€ƒæ¨£æœ¬å¹³å‡
+        - mean_new       : æ–°æ¨£æœ¬å¹³å‡
+        - mean_diff      : å·®å€¼
+        - mean_ratio     : æ¯”ä¾‹
+        - std_ref        : æ¨™æº–å·®ï¼ˆåƒè€ƒï¼‰
+        - std_new        : æ¨™æº–å·®ï¼ˆæ–°æ¨£æœ¬ï¼‰
+        - std_ratio      : æ¯”ä¾‹
+        - n_ref / n_new  : å„æ¨£æœ¬æœ‰æ•ˆæ¨£æœ¬æ•¸
 
-# 2 ®×¥ó¶ZÂ÷
-def score2_distance(self, CollateralInfo, NearCase, similarityDict):
+    å›å‚³æ¬„ä½ï¼ˆé¡åˆ¥å‹ï¼‰ï¼š
+        - feature        : æ¬„ä½åç¨±
+        - type           : "categorical"
+        - js_div         : Jensenâ€“Shannon divergence
+        - top_diff       : å‰å¹¾å¤§é¡åˆ¥æ¯”ä¾‹å·®ç•°ï¼ˆlist[dict]ï¼‰
+        - n_ref / n_new  : å„æ¨£æœ¬æœ‰æ•ˆæ¨£æœ¬æ•¸
+    """
+    # å°é½Šæ¬„ä½
+    cols = _prepare_feature_list(df_ref, df_new, feature_cols)
+    if not cols:
+        raise ValueError("run_similarity(): æ‰¾ä¸åˆ°å¯æ¯”è¼ƒçš„æ¬„ä½ï¼Œè«‹æª¢æŸ¥ feature_cols æˆ– df_ref/df_new çš„æ¬„ä½äº¤é›†ã€‚")
 
-    Distance = NearCase['Distance']
-    Distance_R2 = NearCase['Distance']
-    
-    if CollateralInfo['HouseType'] == 'R1':
-        if Distance <= similarityDict['Distance'][0][0]:  # 200¤½¤Ø¤º
-            return similarityDict['Distance'][0][1]
-        elif Distance <= similarityDict['Distance'][1][0]:  # 500¤½¤Ø¤º
-            return similarityDict['Distance'][1][1]
-        elif Distance <= similarityDict['Distance'][2][0]:  # 1000¤½¤Ø¤º
-            return similarityDict['Distance'][2][1]
-        else:  # 1000¤½¤Ø¥~
-            return 0
+    results: List[Dict[str, Any]] = []
 
-    elif CollateralInfo['HouseType'] != 'R1':
-        if Distance_R2 <= similarityDict['Distance_R2'][0][0]:  # 100¤½¤Ø¤º
-            return similarityDict['Distance_R2'][0][1]
-        elif Distance_R2 <= similarityDict['Distance_R2'][1][0]:  # 500¤½¤Ø¤º
-            return similarityDict['Distance_R2'][1][1]
-        elif Distance_R2 <= similarityDict['Distance_R2'][2][0]:  # 1000¤½¤Ø¤º
-            return similarityDict['Distance_R2'][2][1]
-        else:  # 1000¤½¤Ø¥~
-            return 0
-    else :
-        return 0
+    for col in cols:
+        s_ref = df_ref[col]
+        s_new = df_new[col]
 
+        # æˆå°å» NA
+        mask_pair = (~s_ref.isna()) & (~s_new.isna())
+        s_ref2 = s_ref[mask_pair]
+        s_new2 = s_new[mask_pair]
 
-# 3 ªÀ°Ï¡B«Ñ§Ë¤ñ¸û
-'''
-1. ¦PªÀ°Ï 4
-2. ¦P¸ô¬q»P«Ñ§Ë 3
-3. ¦P¸ô¬q¡B¦P«Ñ§ËÄİ©Ê¡B¤£¦P«Ñ§Ë 2
-4. ¦P«Ñ§ËÄİ©Ê 1
-5. ¤£¦P
-'''
-def score3_community_or_alley(self, CollateralInfo, NearCase, similarityDict):
+        n_ref = int(len(s_ref2))
+        n_new = int(len(s_new2))
 
-    CollateralIsAlley = CollateralInfo['isAlley']
-    CollateralCommunityNbr = CollateralInfo['CommunityNbr']
+        if n_ref == 0 or n_new == 0:
+            results.append(
+                {
+                    "feature": col,
+                    "type": "unknown",
+                    "note": "å…©é‚Šçš†ç„¡æœ‰æ•ˆè³‡æ–™ï¼Œç•¥é",
+                    "n_ref": n_ref,
+                    "n_new": n_new,
+                }
+            )
+            continue
 
-    CollateralRoad = CollateralInfo['road']
-    CollateralSection = CollateralInfo['section']
-    CollateralLane = CollateralInfo['lane']
-    CollateralAlley = CollateralInfo['alley']
-    
+        if _is_numeric(s_ref2):
+            # æ•¸å€¼å‹
+            numeric_stats = calc_numeric_stats(s_ref2, s_new2)
+            psi_val = calc_psi(pd.to_numeric(s_ref2, errors="coerce"),
+                               pd.to_numeric(s_new2, errors="coerce"),
+                               bins=psi_bins)
+            ks_val = calc_ks(pd.to_numeric(s_ref2, errors="coerce"),
+                             pd.to_numeric(s_new2, errors="coerce"))
 
-    if CollateralInfo['HouseType'] == 'R1':
-        if NearCase['addressNearLevel'] == similarityDict['Alley'][0][0][0]:
-            return similarityDict['Alley'][0][1]  # 3 ¦P«Ñ§ËÄİ©Ê
-        elif NearCase['addressNearLevel'] == similarityDict['Alley'][1][0]:
-            return similarityDict['Alley'][1][1]  # 2 ¦P«Ñ§ËÄİ©Ê¡A¦P¸ô¬q
-        elif NearCase['addressNearLevel'] == similarityDict['Alley'][2][0]:
-            return similarityDict['Alley'][2][1]  # 1 ¦P«Ñ§ËÄİ©Ê
+            row: Dict[str, Any] = {
+                "feature": col,
+                "type": "numeric",
+                "psi": psi_val,
+                "ks": ks_val,
+                "n_ref": n_ref,
+                "n_new": n_new,
+            }
+            row.update(numeric_stats)
+            results.append(row)
         else:
-            return similarityDict['Alley'][3][1]  # 1 ¤£¦P«Ñ§ËÄİ©Ê
-        
-    elif CollateralInfo['HouseType'] != 'R1':
-        if NearCase['CommunityNbr'] == CollateralCommunityNbr and NearCase['CommunityNbr'] != '':
-            return similarityDict['Community'][0][1]
-        else :
-            return 0
-    else:
-        # print('not R1')
-        return 0
+            # é¡åˆ¥å‹
+            cat_stats = calc_categorical_distance(s_ref2, s_new2)
+            top_diff = cat_stats["top_diff"][:max_top_diff]
+            results.append(
+                {
+                    "feature": col,
+                    "type": "categorical",
+                    "js_div": cat_stats["js_div"],
+                    "top_diff": top_diff,
+                    "n_ref": n_ref,
+                    "n_new": n_new,
+                }
+            )
 
+    summary = pd.DataFrame(results)
 
-# 4 ¼Ó¼h¦ì¸m¤ñ¸û
-def score4_floor(self, CollateralInfo, NearCase, similarityDict):
+    # å°æ’åºï¼šæ•¸å€¼æ¬„ä½ä»¥ PSI ç”±å¤§åˆ°å°ï¼Œé¡åˆ¥ä»¥ js_div ç”±å¤§åˆ°å°
+    def _sort_key(row):
+        if row["type"] == "numeric":
+            return row.get("psi", 0.0)
+        if row["type"] == "categorical":
+            return row.get("js_div", 0.0)
+        return 0.0
 
-    CollateralFloorCode = int(CollateralInfo['FloorCode'])
-    CollateralTotalFloor = int(CollateralInfo['TotalFloor'])
-    CollateralFloorOtherCnt = int(CollateralInfo['FloorOtherCnt'])
-    
-    floorDiff = abs(int(NearCase['FloorCode']) - CollateralFloorCode)
-    
-    if CollateralInfo['HouseType'] != 'R1'  and CollateralFloorCode not in  (998, 999) and int(NearCase['FloorCode']) not in  (998, 999):         
-        if floorDiff <= similarityDict['Floor_R2'][0][0]:  # ®t3¼Ó¤º
-            return similarityDict['Floor_R2'][0][1]
-        elif floorDiff <= similarityDict['Floor_R2'][1][0]: # ®t8¼Ó¤º
-            return similarityDict['Floor_R2'][1][1]
-        else:
-            return 0
-        
-    elif CollateralInfo['HouseType'] == 'R1':         
-        if int(NearCase['FloorCode']) == CollateralFloorCode and CollateralFloorCode != 999 and int(NearCase['FloorCode']) != 999:  # ¦P¼Ó¼h
-            return similarityDict['Floor'][0][1]
-        elif CollateralFloorCode not in  (1, 999, 998) and CollateralTotalFloor != CollateralFloorCode  and int(NearCase['TotalFloorCode']) != int(NearCase['FloorCode']) and  int(NearCase['FloorCode']) not in  (1, 999, 998) and int(NearCase['FloorCode']) > 0: # ¦PÄİ¨ä¥L¼Ó     
-            return similarityDict['Floor'][1][1]
-        else:
-            return 0
-        
-    else:
-        return 0
+    summary = summary.sort_values(
+        by=summary.apply(_sort_key, axis=1).name,
+        ascending=False,
+    )
 
+    # ä¸Šé¢ sort_values çš„ key trick æ¯”è¼ƒé†œï¼Œä½ ä¸å–œæ­¡å¯ä»¥æ”¹æˆï¼š
+    # summary["sort_score"] = summary.apply(_sort_key, axis=1)
+    # summary = summary.sort_values("sort_score", ascending=False).drop(columns=["sort_score"])
 
-# 5 ©W¼Æ®t²§¤ñ¸û
-def score5_area(self, CollateralInfo, NearCase, similarityDict):
-
-    CollateralReCalFloorage = CollateralInfo['ReCalFloorage']
-    areaDiffPercent = abs((NearCase['BuildingArea'] - CollateralReCalFloorage) / CollateralReCalFloorage)  # ©W¼Æ®t²§¤ñ¨Ò
-    
-    if areaDiffPercent <= similarityDict['Ping'][0][0]:  # ®t²§30%¤º
-        return similarityDict['Ping'][0][1]
-    elif areaDiffPercent <= similarityDict['Ping'][1][0]:  # ®t²§50%¤º
-        return similarityDict['Ping'][1][1]
-    else:  # ®t²§50%¥H¤W
-        return 0
-
-
-# 6 «ÎÄÖ¤ñ¸û
-def score6_age(self, CollateralInfo, NearCase, similarityDict):
-
-    CollateralAge = CollateralInfo['Age']
-    ageDiff = abs(NearCase['Age'] - CollateralAge)  # «ÎÄÖ®t²§­È
-    
-    if CollateralInfo['HouseType'] == 'R1':
-        if ageDiff <= similarityDict['Age'][0][0]:  # 3¦~¤º
-            return similarityDict['Age'][0][1]
-        elif ageDiff <= similarityDict['Age'][1][0]:  # 5¦~¤º
-            return similarityDict['Age'][1][1]
-        elif ageDiff <= similarityDict['Age'][2][0]:  # 5¦~¤º
-            return similarityDict['Age'][2][1]
-        else:  # 10¦~¥H¤W
-            return 0
-    
-    elif CollateralInfo['HouseType'] != 'R1':
-        if ageDiff <= similarityDict['Age_R2'][0][0]:  # 3¦~¤º
-            return similarityDict['Age_R2'][0][1]
-        elif ageDiff <= similarityDict['Age_R2'][1][0]:  # 5¦~¤º
-            return similarityDict['Age_R2'][1][1]
-        elif ageDiff <= similarityDict['Age_R2'][2][0]:  # 5¦~¤º
-            return similarityDict['Age_R2'][2][1]
-        else:  # 10¦~¥H¤W
-            return 0
-
-    else:
-        return 0
-        
-    
-
-
-# 7 «Ñ§ËÄİ©Ê
-def score7_alley(self, CollateralInfo, NearCase, similarityDict):
-    CollateralAlley = CollateralInfo['alley']
-    if NearCase['addressNearLevel'] == similarityDict['Alley'][0][0][0] and NearCase['Distance'] <= similarityDict['Alley'][0][0][1]:
-        return similarityDict['Alley'][0][1]  # 3 ¦P«Ñ§ËÄİ©Ê¡A¦P¸ô¬q«Ñ«Ñ§Ë¥B¶ZÂ÷<=200
-    elif NearCase['addressNearLevel'] == similarityDict['Alley'][1][0]:
-        return similarityDict['Alley'][1][1]  # 2 ¦P«Ñ§ËÄİ©Ê¡A¦P¸ô¬q
-    elif NearCase['addressNearLevel'] == similarityDict['Alley'][1][0]:
-        return similarityDict['Alley'][2][1]  # 1 ¦P«Ñ§ËÄİ©Ê
-    else:
-        return similarityDict['Alley'][3][1]  # 1 ¤£¦P«Ñ§ËÄİ©Ê
-
-# score algo
-def similarity_caculate(self, NearCase, similarityDict):
-    # ¬d¸ß¾á«O«~¸ê°T
-    CollateralInfo = self.dfCollateral[self.dfCollateral['ApplNo'] == NearCase['ApplNo']].iloc[0]
-
-    is_ingore = self.case_ingore(CollateralInfo, NearCase)  # §PÂ_¦C¤J­pºâªº®×¥ó
-
-    s1_transaction_datediff = self.score1_transaction_datediff(CollateralInfo,NearCase, similarityDict)  # ¥æ©ö®É¶¡®t
-    s2_distance = self.score2_distance(CollateralInfo,NearCase, similarityDict)  # ¶ZÂ÷
-    s3_community_or_alley = self.score3_community_or_alley(CollateralInfo, NearCase, similarityDict)  # ¦PªÀ°Ï©Î¦P«Ñ§ËÄİ©Ê
-    s4_floor = self.score4_floor(CollateralInfo, NearCase, similarityDict)  # ¼Ó¼h
-    s5_area = self.score5_area(CollateralInfo, NearCase, similarityDict)  # ©W¼Æ
-    s6_age = self.score6_age(CollateralInfo, NearCase, similarityDict)  # «ÎÄÖ
-
-    result = [is_ingore, s1_transaction_datediff, s2_distance, s3_community_or_alley, s4_floor, s5_area, s6_age]  # µ²ªG
-
-    return result
-
-
-def floorMappingAndCheckDigit(self, x):
-    res = self.TotalFloorMapping[x] if x in self.TotalFloorMapping.keys() else x
-    res = int(res) if str(res).isdigit() else 9999
-    return res
-
-scoreParameter_v2 = {
-    'DealMonthDiff': [[6, 62], [12, 60], [24, 55]],
-    'Distance': [[200, 7], [500, 4], [1000, 1]],
-    'Alley': [[[3, 5000], 12], [2, 9], [1, 8], [0, 0]],
-    'Floor': [['same', 3], ['other', 1]],
-    'Ping': [[0.3, 2], [0.5, 1]],
-    'Age': [[3, 10], [5, 5], [10, 1]],
-    'Distance_R2': [[100, 15], [500, 10], [1000, 5]],
-    'Community': [['same', 4], ['similar', 3]],
-    'Alley_R2': [[[3, 5000], 11], [2, 9], [1, 8], [0, 0]],
-    'Floor_R2': [[3, 3], [8, 1]],
-    'Age_R2': [[3, 10], [5, 5], [10, 2]],
-}
-
-version_int = '2'
-use_score_parameter = scoreParameter_v2
-
-dfCompareCases_caculate = dfCompareCases.copy()
-
-print('computing...')
-dfCompareCases_caculate[f'v{version_int}_result'] = dfCompareCases_caculate.apply(lambda x: dgis.similarity_caculate(x, use_score_parameter), axis=1)
-
-print('summarizing...')
-dfCompareCases_caculate[f'v{version_int}_ignore'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: x[0])
-
-dfCompareCases_caculate[f'v{version_int}_s1_deal_datediff'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: x[1])
-dfCompareCases_caculate[f'v{version_int}_s2_distance'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: x[2])
-dfCompareCases_caculate[f'v{version_int}_s3_community_or_alley'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: x[3])
-dfCompareCases_caculate[f'v{version_int}_s4_floor'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: x[4])
-dfCompareCases_caculate[f'v{version_int}_s5_area'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: x[5])
-dfCompareCases_caculate[f'v{version_int}_s6_age'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: x[6])
-
-dfCompareCases_caculate[f'v{version_int}_similarity'] = dfCompareCases_caculate[f'v{version_int}_result'].apply(lambda x: sum(x[1:]))
-
-print('sorting...')
-dfCompareCases_caculate = dfCompareCases_caculate.sort_values(['ApplNo', f'v{version_int}_similarity'], ascending=False)
-dfCompareCases_caculate = dfCompareCases_caculate.reset_index(drop=1)
-dfCompareCases_caculate.head()
-datetime.now()
+    return summary
