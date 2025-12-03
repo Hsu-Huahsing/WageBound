@@ -37,3 +37,6 @@ __all__ = [
     "dict_to_df",
     "merge_logs",
 ]
+# WageBound/verify/__init__.py
+
+from .runner import verify_dataframe  # 新增這一行
