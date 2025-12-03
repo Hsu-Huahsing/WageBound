@@ -1,50 +1,68 @@
-# WageBound/verify/hpm_verify_api.py
+# -*- coding: utf-8 -*-
+"""
+verify/hpm_verify_api.py
 
-from pathlib import Path
-import pandas as pd
+從 Excel 載入 HPM 測試資料 → 呼叫 HPM API → 比對 → 輸出結果。
+"""
 
-from config.verify_config import (
-    HPM_TEST_XLSX,
-    HPM_API_URL,
-    HPM_COMPARE_COLS,
+from __future__ import annotations
+
+from typing import List
+
+from verify.base import (
+    VerifyCaseConfig,
+    load_hpm_cases,
+    call_hpm_api_for_cases,
+    compare_import_vs_api,
+    save_verify_output,
 )
-
-from .base import load_hpm_test_cases, call_hpm_api, compare_case
-
-
-def run_hpm_api_verify(
-    cases_path: Path = HPM_TEST_XLSX,
-    *,
-    max_cases: int | None = None,
-) -> pd.DataFrame:
-    """主函式：跑一輪 API 驗證，回傳比對結果 DataFrame。"""
-    df_cases = load_hpm_test_cases(cases_path)
-
-    if max_cases is not None:
-        df_cases = df_cases.head(max_cases)
-
-    results = []
-    for _, row in df_cases.iterrows():
-        api_result = call_hpm_api(row, url=HPM_API_URL)
-        comp = compare_case(row, api_result, HPM_COMPARE_COLS)
-        results.append(comp)
-
-    result_df = pd.DataFrame(results)
-    return result_df
+from config.verify_config import HPM_COMPARE_COLS
 
 
-def main():
-    df_result = run_hpm_api_verify()
-    # 這裡你可以決定要不要寫出 Excel / CSV
-    out_path = HPM_TEST_XLSX.with_name(HPM_TEST_XLSX.stem + "_api_verify_result.xlsx")
-    df_result.to_excel(out_path, index=False)
-    print(f"HPM API 驗證完成，輸出：{out_path}")
+def build_default_case() -> VerifyCaseConfig:
+    """
+    定義一個預設驗證情境：
+      - sheet_name: 你的測試分頁
+      - key_cols  : 對齊匯入 vs API 的 key（自己決定）
+      - compare_cols: 用 verify_config.HPM_COMPARE_COLS
+      - date_cols : 若匯入有日期欄，就填在這裡
+      - use_cols  : 實務上只想拿來分析的欄位
+    """
+    key_cols: List[str] = ["客戶ID", "案件編號"]  # TODO：換成你實際的 key 欄位
+
+    # ⚠️ use_cols 這裡示意：key + 比對欄位
+    use_cols: List[str] = key_cols + list(HPM_COMPARE_COLS.keys())
+
+    cfg = VerifyCaseConfig(
+        name="hpm_api_default",
+        sheet_name="HPM測試案例",   # TODO：你的 Excel 分頁名稱
+        key_cols=key_cols,
+        compare_cols=HPM_COMPARE_COLS,
+        date_cols=["申請日"],        # 若沒有就改成 [] 或 None
+        use_cols=use_cols,
+    )
+    return cfg
+
+
+def run_hpm_api_verify() -> None:
+    cfg = build_default_case()
+
+    # 1. 載入測試資料（含日期轉換 & 欄位篩選）
+    df_imp = load_hpm_cases(cfg)
+
+    # 2. 呼叫 API 拿結果
+    df_api = call_hpm_api_for_cases(df_imp)
+
+    # 3. 比對匯入 vs API
+    df_merged, df_diff = compare_import_vs_api(
+        df_import=df_imp,
+        df_api=df_api,
+        cfg=cfg,
+    )
+
+    # 4. 輸出差異與完整紀錄
+    save_verify_output(cfg, df_merged, df_diff)
 
 
 if __name__ == "__main__":
-    main()
-
-"""
-from verify.hpm_verify_api import run_hpm_api_verify
-df_chk = run_hpm_api_verify(max_cases=100)
-"""
+    run_hpm_api_verify()
