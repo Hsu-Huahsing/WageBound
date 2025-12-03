@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "WageBound"
-version = "002"  # 發佈時務必遞增
+version = "0.0.3"  # 發佈時務必遞增
 description = "Utility toolkit for data IO, DataFrame operations, and control-flow helpers."
 readme = "ARCHITECTURE.md"
 requires-python = ">=3.9"
