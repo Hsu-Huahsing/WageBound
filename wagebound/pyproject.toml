@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "WageBound"
+version = "001"  # 發佈時務必遞增
+description = "Utility toolkit for data IO, DataFrame operations, and control-flow helpers."
+readme = "ARCHITECTURE.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Steven" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+# dependencies = ["pandas>=2.0", "requests>=2.31"]
+
+[project.urls]
+Homepage = "https://github.com/<你的帳號>/WageBound"
+Issues   = "https://github.com/<你的帳號>/WageBound/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/WageBound"]
