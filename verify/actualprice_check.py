@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Jun 20 17:14:13 2024
+實價 vs 鑑價價格檢核腳本（legacy）
 
-@author: Z00051711
+注意：
+- 目前是純 script 寫法，沒有封裝成函式。
+- 建議未來重構為：
+    - ActualPriceVerifyConfig（dataclass）
+    - run_actual_price_verify(config) → 回傳 df / 輸出報表
 """
+
 
 from ctbc_project.config import checkinterval, colname, maxlength
 from os.path import join
