@@ -1,4 +1,4 @@
-# verify/rules_schema.py
+# verify/rules.py
 # -*- coding: utf-8 -*-
 """
 結構 / 欄位 / 型別 / 範圍類驗證規則
