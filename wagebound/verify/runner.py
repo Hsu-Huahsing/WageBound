@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-verify.runner
-=============
+wagebound.verify.runner
+=======================
 
-用途（這個檔案負責的事情）：
+用途：
     - 統一管理「要跑哪些驗證」、「怎麼一次跑完」。
     - 不自己寫任何業務邏輯，只是把 verify 子模組裡的檢查程式跑一輪。
     - 回傳一個整理好的 pd.DataFrame，方便後續寫入 Excel / DB / 報表。
@@ -14,39 +14,13 @@ verify.runner
     3. 檢查邏輯集中在各自的 script 裡（例如: missing_value.py、range_check.py...），
        每個檢查 script 自己把「檢查函式或類別」註冊到 base.VERIFIER_REGISTRY。
     4. runner 只需要知道 base.VERIFIER_REGISTRY，就能跑所有已註冊的檢查。
-
-預期 base.py 至少要提供：
-    - VERIFIER_REGISTRY: dict[str, Any]
-      key   = 檢查名稱（字串）
-      value = 檢查物件、檢查類別，或簡單的檢查函式
-
-    每個檢查的介面建議（但不強制）：
-        1) 類別型：
-            class XXXVerifier:
-                name = "xxx"  # 可選，沒有的話 runner 會用 registry key 當名稱
-
-                def run(self, df: pd.DataFrame, context: dict | None = None) -> dict:
-                    return {
-                        "name": self.name,
-                        "passed": True/False,
-                        "level": "info/warn/error",
-                        "message": "...",
-                        "details": {...}  # 可選
-                    }
-
-        2) 函式型：
-            def check_xxx(df: pd.DataFrame, context: dict | None = None) -> dict:
-                return {... 同上 ...}
-
-    runner 只要求「最後一定要回傳 dict 或類似物件」，會幫你轉成 DataFrame。
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import inspect
-
 import pandas as pd
 
 from . import base  # 只依賴 base.VERIFIER_REGISTRY
@@ -55,6 +29,7 @@ from . import base  # 只依賴 base.VERIFIER_REGISTRY
 # ---------------------------------------------------------------------------
 # 工具函式：存取 registry
 # ---------------------------------------------------------------------------
+
 
 def _get_registry() -> Dict[str, Any]:
     """
@@ -94,6 +69,7 @@ def list_available_checks() -> List[str]:
 # 工具函式：根據 include / exclude 篩選要跑哪些檢查
 # ---------------------------------------------------------------------------
 
+
 def _filter_registry(
     registry: Dict[str, Any],
     include: Optional[Sequence[str]] = None,
@@ -125,6 +101,7 @@ def _filter_registry(
 # 工具函式：執行單一檢查 + 統一把結果轉成 dict
 # ---------------------------------------------------------------------------
 
+
 def _instantiate_checker(obj: Any) -> Any:
     """
     根據 registry 裡的 value 建立檢查物件：
@@ -151,7 +128,7 @@ def _run_one_checker(
 
     支援的型態：
         - 類別：有 run(df, context) 方法
-        - 函式：check(df, context) → dict / 其他
+        - 函式：check(df, context) -> dict / 其他
         - 物件：有 run(...) 或 __call__(...)
     """
     ctx = dict(context) if context else {}
@@ -218,6 +195,7 @@ def _run_one_checker(
 # ---------------------------------------------------------------------------
 # 對外主函式：一次跑完所有（或指定）驗證
 # ---------------------------------------------------------------------------
+
 
 def run_verifications(
     df: pd.DataFrame,
@@ -290,59 +268,7 @@ def run_verifications(
     return result_df
 
 
-# ---------------------------------------------------------------------------
-# 簡單範例（給你在 Notebook / .py 測試用，不會用到 cmd）
-# ---------------------------------------------------------------------------
-
-def demo() -> pd.DataFrame:
-    """
-    簡易示範：建立一個假資料 df，跑目前所有已註冊的驗證。
-
-    實務上你不一定會用到這個函式，只是方便你確認架構有沒有接好。
-    """
-    demo_df = pd.DataFrame(
-        {
-            "Customer_ID": [1, 2, 3],
-            "Wage": [50000, 60000, None],
-            "Area": ["A1", "A2", "A2"],
-        }
-    )
-
-    return run_verifications(demo_df)
-
-
-if __name__ == "__main__":
-    # 這段只在你直接執行 runner.py 時會跑到；
-    # 你平常在別的 .py 裡 import 是不會觸發的。
-    df_demo = demo()
-    # 這裡只是一個輕量 smoke test，你平常可以忽略。
-    print(df_demo)
-
-
-"""
-實務上你要怎麼用
-
-在你的「真正業務程式」裡（例如 app/main.py 或某個 notebook）：
-
-import pandas as pd
-
-from wagebound.verify.runner import run_verifications
-from wagebound.verify import some_check_module  # 確保檢查 script 被 import，裡面的 register 有執行
-
-# 1. 準備好 df
-df = ...  # 你要驗證的主 DataFrame
-
-# 2. 跑全部註冊好的驗證
-result_df = run_verifications(df)
-
-# 3. 只跑其中幾個（假設 base.VERIFIER_REGISTRY 裡有這些 key）
-result_df2 = run_verifications(df, include=["missing_value", "range_check"])
-
-# 4. 帶一些 context（例如專案代碼、日期、門檻）
-ctx = {"project_id": "2025Q4_WAGE", "run_date": "2025-10-06"}
-result_df3 = run_verifications(df, context=ctx)
-
-
-如果你願意，把現在的 verify/base.py 貼上來，我可以再幫你把 runner.py 的介面跟 base 完全對齊（例如：直接吃你現在的 register()、BaseVerifier、VerifyResult 結構），但就算不貼，以上這個 runner.py 也可以當作標準版，往回調整 base 讓它符合這個模式。
-
-"""
+__all__ = [
+    "list_available_checks",
+    "run_verifications",
+]

@@ -1,241 +1,175 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+# -*- coding: utf-8 -*-
+"""
+wagebound.verify.rules
+======================
+
+結構 / 欄位 / 型別 / 範圍類驗證規則的工廠函式。
+
+這個模組只負責「幫你組 ValidationRule」，
+實際執行則交給 ValidationRule.run(df)。
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
-import numpy as np
-import itertools
+
+from .base import ValidationIssue, ValidationRule
 
 
-@dataclass
-class VerifyConfig:
-    """定義這次驗證要用到哪些欄位，以及數值比對的規則。"""
-    key_cols: List[str]
-    numeric_cols: List[str]
-    date_cols: Optional[List[str]] = None
-    date_mode: Optional[int] = None  # 先保留欄位，之後若要接 stringtodate 再用
-    atol: float = 0.0                # 絕對誤差容許值
-    rtol: float = 0.0                # 相對誤差容許值（乘在 expected 上）
-
-
-@dataclass
-class VerifyIssue:
-    """記錄一次驗證過程中發現的問題。"""
-    level: str              # "error" / "warn"
-    code: str               # 例如 "MISSING_COLUMN_EXPECTED"
-    message: str
-    column: Optional[str] = None
-    context: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class VerifyResult:
-    """驗證結果：是否通過、有哪些 issue、哪些列有數值差異。"""
-    config: VerifyConfig
-    issues: List[VerifyIssue]
-    diff_rows: pd.DataFrame
-
-    @property
-    def ok(self) -> bool:
-        """沒有 error 且沒有數值差異列時視為通過。"""
-        if any(i.level == "error" for i in self.issues):
-            return False
-        return self.diff_rows.empty
-
-    def summary(self) -> str:
-        """給人看的摘要字串。"""
-        parts = []
-        if self.ok:
-            parts.append("✅ 驗證通過：未發現 error，數值完全一致。")
-        else:
-            parts.append("⚠️ 驗證未通過：")
-        if self.issues:
-            err_cnt = sum(1 for i in self.issues if i.level == "error")
-            warn_cnt = sum(1 for i in self.issues if i.level == "warn")
-            parts.append(f"- error: {err_cnt} 則，warn: {warn_cnt} 則")
-        parts.append(f"- 數值差異列數：{len(self.diff_rows)}")
-        return "\n".join(parts)
-
-
-def _prepare_date_columns(df: pd.DataFrame, cfg: VerifyConfig) -> pd.DataFrame:
+def make_required_columns_rule(required_cols: List[str]) -> ValidationRule:
     """
-    將指定的日期欄位轉成 datetime64[ns]；目前先用 pandas.to_datetime，
-    之後若要接你自己寫的 stringtodate，可以在這裡改。
+    檢查指定欄位是否全部存在。
     """
-    if not cfg.date_cols:
-        return df
 
-    df = df.copy()
-    for col in cfg.date_cols:
-        if col not in df.columns:
-            continue
-        df[col] = pd.to_datetime(df[col], errors="coerce")
-    return df
-
-
-def _select_working_columns(df: pd.DataFrame, cfg: VerifyConfig) -> pd.DataFrame:
-    """
-    只保留這次要用到的欄位（key + numeric + date），避免 300 欄一起拖下水。
-    不存在的欄位會被忽略，但會在 verify_dataframes 裡面記一條 issue。
-    """
-    cols = list(dict.fromkeys(
-        (cfg.key_cols or [])
-        + (cfg.numeric_cols or [])
-        + (cfg.date_cols or [])
-    ))
-    existing = [c for c in cols if c in df.columns]
-    return df[existing].copy()
-
-
-def _record_missing_columns(df: pd.DataFrame, cfg: VerifyConfig, which: str) -> List[VerifyIssue]:
-    """
-    檢查 df 裡缺哪些欄位；which = "expected" / "actual"。
-    """
-    issues: List[VerifyIssue] = []
-    need_cols = list(dict.fromkeys(
-        (cfg.key_cols or [])
-        + (cfg.numeric_cols or [])
-        + (cfg.date_cols or [])
-    ))
-    for col in need_cols:
-        if col not in df.columns:
-            issues.append(
-                VerifyIssue(
-                    level="error",
-                    code=f"MISSING_COLUMN_{which.upper()}",
-                    column=col,
-                    message=f"{which} 資料缺少必要欄位：{col}",
+    def _check(df: pd.DataFrame) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        for col in required_cols:
+            if col not in df.columns:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        rule_id="SCHEMA_REQUIRED_COLUMNS",
+                        message=f"缺少必要欄位：{col}",
+                        column=col,
+                        row_idx=None,
+                        key_values={},
+                    )
                 )
-            )
-    return issues
+        return issues
+
+    return ValidationRule(
+        id="SCHEMA_REQUIRED_COLUMNS",
+        description="檢查必要欄位是否存在",
+        severity="error",
+        check_fn=_check,
+    )
 
 
-def verify_dataframes(
-    expected: pd.DataFrame,
-    actual: pd.DataFrame,
-    config: VerifyConfig,
-) -> VerifyResult:
+def make_dtype_rule(expected_dtypes: Dict[str, str]) -> ValidationRule:
     """
-    核心驗證函式：比較 expected vs actual。
+    檢查欄位 dtype 是否符合預期。
 
-    步驟：
-        1. 檢查必要欄位是否存在（key / numeric / date）
-        2. 僅保留這次要用到的欄位
-        3. 日期欄位轉成 datetime
-        4. 用 key_cols 做 outer join，找出：
-            - 只在 expected 出現的 key（missing in actual）
-            - 只在 actual 出現的 key（unexpected new rows）
-        5. 對 numeric_cols 做逐列差異比對，產生 diff_rows
+    expected_dtypes:
+        - key   : 欄位名稱
+        - value : 預期 dtype 字串（例如 'int64', 'float64', 'object', 'datetime64[ns]'）
     """
-    cfg = config
-    issues: List[VerifyIssue] = []
 
-    # 1) 欄位檢查
-    issues.extend(_record_missing_columns(expected, cfg, "expected"))
-    issues.extend(_record_missing_columns(actual, cfg, "actual"))
+    def _check(df: pd.DataFrame) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        for col, expected_dtype in expected_dtypes.items():
+            if col not in df.columns:
+                # 交給 required_columns_rule 處理，這裡略過
+                continue
+            actual_dtype = str(df[col].dtype)
+            if actual_dtype != expected_dtype:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        rule_id="SCHEMA_DTYPE_MISMATCH",
+                        message=f"欄位 {col} dtype 不符，預期 {expected_dtype}，實際 {actual_dtype}",
+                        column=col,
+                        row_idx=None,
+                        key_values={"expected_dtype": expected_dtype, "actual_dtype": actual_dtype},
+                    )
+                )
+        return issues
 
-    # 真正可用的 key / numeric / date（兩邊都存在才算）
-    key_cols = [c for c in cfg.key_cols if c in expected.columns and c in actual.columns]
-    num_cols = [c for c in cfg.numeric_cols if c in expected.columns and c in actual.columns]
-    date_cols = [c for c in (cfg.date_cols or []) if c in expected.columns and c in actual.columns]
+    return ValidationRule(
+        id="SCHEMA_DTYPE_MISMATCH",
+        description="檢查欄位 dtype 是否符合預期",
+        severity="error",
+        check_fn=_check,
+    )
 
-    if not key_cols:
-        issues.append(
-            VerifyIssue(
-                level="error",
-                code="NO_COMMON_KEY_COLUMNS",
-                message="expected 與 actual 沒有任何共同的 key_cols，無法比對。",
-                context={"key_cols": cfg.key_cols},
-            )
-        )
-        # 既然連 key 都沒有，直接回傳空 diff
-        empty = pd.DataFrame()
-        return VerifyResult(config=cfg, issues=issues, diff_rows=empty)
 
-    # 2) 只保留需要的欄位
-    exp = _select_working_columns(expected, cfg)
-    act = _select_working_columns(actual, cfg)
+def make_notnull_rule(required_notnull_cols: List[str]) -> ValidationRule:
+    """
+    檢查某些欄位是否存在缺值。
+    """
 
-    # 3) 日期欄位轉成 datetime
-    exp = _prepare_date_columns(exp, cfg)
-    act = _prepare_date_columns(act, cfg)
+    def _check(df: pd.DataFrame) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        for col in required_notnull_cols:
+            if col not in df.columns:
+                # 交給 required_columns_rule 處理，這裡略過
+                continue
+            null_idx = df.index[df[col].isna()]
+            for idx in null_idx:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        rule_id="SCHEMA_NOTNULL",
+                        message=f"欄位 {col} 不應為空值，但在列 {idx} 發現缺值。",
+                        column=col,
+                        row_idx=int(idx) if isinstance(idx, (int, float)) else None,
+                        key_values={"column": col},
+                    )
+                )
+        return issues
 
-    # 4) 設定索引為 key_cols，方便做集合運算
-    exp_idxed = exp.set_index(key_cols)
-    act_idxed = act.set_index(key_cols)
+    return ValidationRule(
+        id="SCHEMA_NOTNULL",
+        description="檢查欄位是否為 NOT NULL",
+        severity="error",
+        check_fn=_check,
+    )
 
-    exp_keys = set(exp_idxed.index)
-    act_keys = set(act_idxed.index)
 
-    missing_in_actual = exp_keys - act_keys
-    extra_in_actual = act_keys - exp_keys
+def make_numeric_range_rule(
+    numeric_ranges: Dict[str, Tuple[Optional[float], Optional[float]]]
+) -> ValidationRule:
+    """
+    檢查數值欄位是否落在合理範圍內。
 
-    if missing_in_actual:
-        sample = list(itertools.islice(missing_in_actual, 5))
-        issues.append(
-            VerifyIssue(
-                level="error",
-                code="MISSING_ROWS_IN_ACTUAL",
-                message=f"actual 缺少 {len(missing_in_actual)} 組 key（只出現在 expected）。",
-                context={"sample_keys": sample},
-            )
-        )
+    numeric_ranges:
+        - key   : 欄位名稱
+        - value : (lower, upper)，允許其中之一為 None 代表「只檢查上限或下限」。
+    """
 
-    if extra_in_actual:
-        sample = list(itertools.islice(extra_in_actual, 5))
-        issues.append(
-            VerifyIssue(
-                level="warn",
-                code="UNEXPECTED_ROWS_IN_ACTUAL",
-                message=f"actual 多出 {len(extra_in_actual)} 組 key（未出現在 expected）。",
-                context={"sample_keys": sample},
-            )
-        )
+    def _check(df: pd.DataFrame) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
+        for col, (lower, upper) in numeric_ranges.items():
+            if col not in df.columns:
+                continue
 
-    # 只對「兩邊都有」的 key 做數值比對
-    common_keys = exp_keys & act_keys
-    if not common_keys or not num_cols:
-        # 沒有共同 key 或沒有數值欄位，就直接回傳（只靠 issues）
-        empty = pd.DataFrame()
-        return VerifyResult(config=cfg, issues=issues, diff_rows=empty)
+            series = pd.to_numeric(df[col], errors="coerce")
+            mask = pd.Series(True, index=series.index)
 
-    exp_common = exp_idxed.loc[sorted(common_keys)]
-    act_common = act_idxed.loc[sorted(common_keys)]
+            if lower is not None:
+                mask &= series >= lower
+            if upper is not None:
+                mask &= series <= upper
 
-    # 5) 比對 numeric_cols
-    diff_frames = []
-    for col in num_cols:
-        exp_series = pd.to_numeric(exp_common[col], errors="coerce")
-        act_series = pd.to_numeric(act_common[col], errors="coerce")
+            # 取出超出範圍的列
+            bad_idx = series.index[~mask]
+            for idx in bad_idx:
+                val = series.loc[idx]
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        rule_id="SCHEMA_NUMERIC_RANGE",
+                        message=f"欄位 {col} 數值超出合理範圍 [{lower}, {upper}]，實際值={val}",
+                        column=col,
+                        row_idx=int(idx) if isinstance(idx, (int, float)) else None,
+                        key_values={"column": col, "value": val},
+                    )
+                )
 
-        diff = act_series - exp_series
+        return issues
 
-        # 判斷「超出容許誤差」的列
-        tol = cfg.atol + cfg.rtol * exp_series.abs()
-        mask = diff.abs() > tol.fillna(cfg.atol)
-
-        if not mask.any():
-            continue
-
-        changed = diff[mask]
-        idx_df = changed.index.to_frame(index=False).reset_index(drop=True)
-        col_df = pd.DataFrame({
-            "column": col,
-            "expected": exp_series[mask].reset_index(drop=True),
-            "actual": act_series[mask].reset_index(drop=True),
-            "diff": changed.reset_index(drop=True),
-        })
-        diff_frames.append(pd.concat([idx_df, col_df], axis=1))
-
-    if diff_frames:
-        diff_rows = pd.concat(diff_frames, ignore_index=True)
-    else:
-        diff_rows = pd.DataFrame(columns=key_cols + ["column", "expected", "actual", "diff"])
-
-    return VerifyResult(config=cfg, issues=issues, diff_rows=diff_rows)
+    return ValidationRule(
+        id="SCHEMA_NUMERIC_RANGE",
+        description="檢查數值欄位是否落在合理範圍內",
+        severity="warning",
+        check_fn=_check,
+    )
 
 
 __all__ = [
-    "VerifyConfig",
-    "VerifyIssue",
-    "VerifyResult",
-    "verify_dataframes",
+    "make_required_columns_rule",
+    "make_dtype_rule",
+    "make_notnull_rule",
+    "make_numeric_range_rule",
 ]
