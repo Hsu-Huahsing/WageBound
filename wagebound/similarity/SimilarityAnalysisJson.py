@@ -14,8 +14,8 @@ Created on Tue Apr 16 09:24:36 2024
 import json
 import pandas as pd
 from os.path import join
-from ctbc_project.config import comparecase_clean, comparecase_select
-from StevenTricks.fileop import PathWalk_df
+from wagebound.config.config import comparecase_clean, comparecase_select
+from StevenTricks.io.file_utils import PathWalk_df
 
 
 # 欄位名稱清理對照

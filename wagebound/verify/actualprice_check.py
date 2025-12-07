@@ -19,7 +19,7 @@ from typing import Dict, Tuple, Optional
 
 import pandas as pd
 
-from wagebound.config import checkinterval, colname, maxlength
+from wagebound.config.config import checkinterval, colname, maxlength
 
 
 # ---------------------------------------------------------------------------

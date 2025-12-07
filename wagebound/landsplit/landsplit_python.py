@@ -12,7 +12,7 @@ from os.path import join
 import numpy as np
 import pandas as pd
 
-from ctbc_project.config import (
+from wagebound.config.config import (
     build_cost,
     ctbc_mainmaterial_ref,
     ctbc_mainmaterial_ref_temp,
@@ -20,7 +20,7 @@ from ctbc_project.config import (
     seg_price_num,
 )
 
-from ctbc_project.config_buildcost import (
+from wagebound.config.config_buildcost import (
     MIN_GROUP_COUNT,
     SPECIAL_REGIONS,
     START_DATE_STR,

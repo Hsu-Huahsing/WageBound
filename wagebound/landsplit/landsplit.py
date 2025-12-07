@@ -21,7 +21,7 @@ from os.path import join
 import numpy as np
 import pandas as pd
 
-from ctbc_project.config import (
+from wagebound.config.config import (
     build_cost,
     ctbc_mainmaterial_ref,
     ctbc_mainmaterial_ref_temp,

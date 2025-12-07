@@ -23,7 +23,7 @@ import pickle
 import pandas as pd
 from numpy import floor
 
-from ctbc_project.config_dgis import (
+from wagebound.config.config_dgis import (
     DGIS_RAW_ROOT,
     DGIS_WB_ROOT,
     DATE_START,

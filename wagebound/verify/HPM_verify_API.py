@@ -21,7 +21,7 @@ import requests
 from tqdm import tqdm
 
 from StevenTricks.fileop import pickleload, picklesave
-from ctbc_project.config import comparecase_select, clean_colname
+from wagebound.config.config import comparecase_select, clean_colname
 
 
 # =============================================================================

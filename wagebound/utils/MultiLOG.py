@@ -23,8 +23,8 @@ from os.path import join
 
 import pandas as pd
 
-from ctbc_project.config import comparecase_select, clean_colname
-from StevenTricks.file_utils import PathWalk_df
+from wagebound.config.config import comparecase_select, clean_colname
+from StevenTricks.io.file_utils import PathWalk_df
 
 # ----------------------------------------------------------------------
 # 設定區：路徑與字串清理
