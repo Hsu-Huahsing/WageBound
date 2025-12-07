@@ -20,7 +20,7 @@ import pandas as pd
 import requests
 from tqdm import tqdm
 
-from StevenTricks.fileop import pickleload, picklesave
+from StevenTricks.io.file_utils import pickleio
 from wagebound.config.config import comparecase_select, clean_colname
 
 
@@ -94,10 +94,10 @@ def dict_to_df(features: list) -> pd.DataFrame:
 # =============================================================================
 
 if exists(source_pkl):
-    data = pickleload(source_pkl)
+    data = pickleio(source_pkl)
 else:
     data = pd.read_excel(join(datapath, source_file))
-    picklesave(data, source_pkl)
+    pickleio(source_pkl,data ,"save")
 
 # =============================================================================
 # 3. 組 dgisinput（CollateralData 展開）與 apiinput（原始 json payload）
@@ -125,7 +125,7 @@ dgisinput = pd.DataFrame(dgis_rows)
 # =============================================================================
 
 if exists(apiresult_pkl):
-    apiresult = pickleload(apiresult_pkl)
+    apiresult = pickleio(apiresult_pkl)
 else:
     max_workers = 10
     targets = apiinput if MAX_CASES is None else apiinput[:MAX_CASES]
@@ -135,7 +135,7 @@ else:
         apiresult = list(tqdm(pool.map(call_api, targets), total=len(targets)))
     print("AccurateEstimation API 呼叫結束:", datetime.now().strftime("%Y/%m/%d %H:%M:%S"))
 
-    picklesave(apiresult, apiresult_pkl)
+    pickleio(apiresult_pkl,apiresult, "save")
 
 # 有需要查單筆時，可以用這個 DataFrame filter
 apiresult_df = pd.DataFrame(

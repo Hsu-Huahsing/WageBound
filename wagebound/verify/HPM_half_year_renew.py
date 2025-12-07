@@ -4,10 +4,11 @@ DGIS 實價登錄清理主程式
 Created on Thu Oct 19 16:56:27 2023
 @author: Z00051711
 """
+from typing import Optional
 
 from wagebound.config.config import cityname, colname, dropcol, dgiskey_lis, dgiskey
-from StevenTricks.io.file_utils import PathWalk_df, picklesave
-from ctbc_project.StevenTricks.snt import strtodate
+from StevenTricks.io.file_utils import PathWalk_df, pickleio
+from StevenTricks.core.convert_utils import stringtodate
 
 from copy import deepcopy
 from os import makedirs
@@ -15,7 +16,38 @@ from os.path import join
 
 import pandas as pd
 
+def strtodate(x: object) -> Optional[str]:
+    """
+    將民國年月日（例：0820412）字串轉成「YYYY/MM/DD」格式。
 
+    規則與原始版相同：
+        - 補零成 7 碼
+        - 年份 +1911
+        - 月 / 日為 00 時補 01
+        - 無法解析時回傳 None
+    """
+    if pd.isna(x):
+        return None
+
+    s = str(x).split(".")[0]          # 去掉小數
+    s = s.replace(" ", "").replace("-", "")
+    if not (6 <= len(s) <= 7):
+        return None
+
+    s = s.zfill(7)
+    d = s[-2:]
+    m = s[-4:-2]
+    y = str(int(s[:-4]) + 1911)
+
+    if d == "00":
+        d = "01"
+    if m == "00":
+        m = "01"
+
+    dt = pd.to_datetime("-".join([y, m, d]), errors="coerce")
+    if pd.isna(dt):
+        return None
+    return dt.strftime("%Y/%m/%d")
 # =============================================================================
 # 日期區間與路徑設定
 # =============================================================================
@@ -122,7 +154,7 @@ for key in list(res.keys()):
 # 存原始不動產買賣，並建立最近三個月建物明細 Excel
 # =============================================================================
 
-picklesave(res["不動產買賣"], join(wb_dir, "realestate_original"))
+pickleio( join(wb_dir, "realestate_original"),res["不動產買賣"],"save")
 
 # 注意：這裡假設 Trading_Date 已經是可比較的日期或一致格式字串
 real_estate_3m = deepcopy(
@@ -154,7 +186,7 @@ data[["Trading_Date", "Completion_Date"]] = data[
     ["Trading_Date", "Completion_Date"]
 ].applymap(strtodate)
 
-picklesave(data, join(wb_dir, "realestate_date"))
+pickleio( join(wb_dir, "realestate_date"),data,"save")
 data.to_csv(join(wb_dir, FILE_TOTAL), sep="|", index=False, encoding="utf8")
 
 
@@ -347,7 +379,7 @@ elif len(data.columns) != 36:
     print("Column length is ERROR")
 else:
     data.to_csv(join(wb_dir, FILE_SEND), sep="|", index=False, encoding="utf8")
-    picklesave(data, join(wb_dir, "realestate_send"))
+    pickleio( join(wb_dir, "realestate_send"),data,"save")
 
 # =============================================================================
 # 加工回來後，再次檢查（由外部系統處理後）
