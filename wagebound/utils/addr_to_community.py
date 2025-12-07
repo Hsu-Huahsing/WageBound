@@ -1,46 +1,73 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Thu Nov  9 15:50:49 2023
-
-@author: Z00054570
-"""
-
 import pandas as pd
-from requests import post
-#  import sys
+import requests
 from tqdm import tqdm
-# sys.path.append('../..')
-# from app.Garage.util import *
 
-def get_community(address, Zip_code):
-    add_data = {
-        "SystemId": "NUMS", 
-        "TransNum":"7108AF85-7EC5-48D8-9174-CEADD52E6F8B",
-        "TransDate":"20231108",
-        "ZipCode": Zip_code,
-        "LocationAdd":address
+DGIS_URL = (
+    "http://172.24.15.230/"
+    "DGISAdressMatch/adressMatchApi/AdressMatchAreaName/AdressMatchAreaName"
+)
+
+SYSTEM_ID = "NUMS"
+TRANS_NUM = "7108AF85-7EC5-48D8-9174-CEADD52E6F8B"
+TRANS_DATE = "20231108"
+
+INPUT_CSV = r"E:\車位自動化拆分專案\地址比對社區\地址比對清單.csv"
+OUTPUT_XLSX = r"E:\車位自動化拆分專案\地址比對社區\outputfile\Case_CmUpdate2.xlsx"
+
+
+def get_community(address: str, zip_code: str, session: requests.Session) -> dict:
+    """呼叫內部 API 以地址＋郵遞區號查社區資訊，失敗時回傳空 dict。"""
+    payload = {
+        "SystemId": SYSTEM_ID,
+        "TransNum": TRANS_NUM,
+        "TransDate": TRANS_DATE,
+        "ZipCode": str(zip_code),
+        "LocationAdd": address,
     }
-    
-    # 地址找社區
-    r = post('http://172.24.15.230/DGISAdressMatch/adressMatchApi/AdressMatchAreaName/AdressMatchAreaName', json=add_data)
-    if r.json()["SystemId"]:
-        result = r.json()
-        return result
-    else:
-        return r.json()
 
-df = pd.read_csv(r"E:\車位自動化拆分專案\地址比對社區\地址比對清單.csv", encoding='Big5')
+    try:
+        resp = session.post(DGIS_URL, json=payload, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        # 出錯時回傳最小可用結構，避免整支程式中斷
+        return {
+            "CommunityNbr": None,
+            "CommunityName": None,
+            "Error": str(e),
+        }
+
+    # 預期正常會有 SystemId，但就算沒有也直接把 data 丟回去
+    return data or {}
 
 
-print('>> 開始比對...')
-for idx, row in tqdm(df.iterrows()):
-    
-    out_json = get_community(row['add'], row['Zip_Code'])  
-    # 地址欄位 郵遞區號欄位
-    
-    df.loc[idx, 'DCDL_BuildingKey'] = out_json['CommunityNbr']
-    df.loc[idx, 'DCDL_CollateralName'] = out_json['CommunityName']
-    # df.loc[idx, 'Out_ResponseNo'] = out_json['ResponseNo']    
+def main() -> None:
+    df = pd.read_csv(INPUT_CSV, encoding="Big5")
 
-df.to_excel(r'E:\車位自動化拆分專案\地址比對社區\outputfile\Case_CmUpdate2.xlsx', encoding='utf-8')
-print('>> 完成比對與輸出!!!')
+    print(">> 開始比對...")
+    building_keys = []
+    community_names = []
+
+    with requests.Session() as session:
+        for row in tqdm(df.itertuples(index=False), total=len(df)):
+            # 這裡假設欄位名稱為 add / Zip_Code
+            out_json = get_community(
+                address=getattr(row, "add"),
+                zip_code=getattr(row, "Zip_Code"),
+                session=session,
+            )
+            building_keys.append(out_json.get("CommunityNbr"))
+            community_names.append(out_json.get("CommunityName"))
+
+    # 一次性回寫欄位，避免在迴圈裡大量 df.loc
+    df["DCDL_BuildingKey"] = building_keys
+    df["DCDL_CollateralName"] = community_names
+    # 若不希望輸出 index，建議關掉
+    df.to_excel(OUTPUT_XLSX, index=False)
+
+    print(">> 完成比對與輸出!!!")
+
+
+if __name__ == "__main__":
+    main()
